@@ -1,28 +1,29 @@
-# ==============================
-# HYBRID RF + RNN IDS SYSTEM
-# ==============================
+# ==========================================================
+# HYBRID RANDOM FOREST + LSTM IDS (CICIDS2017)
+# ==========================================================
 
 import pandas as pd
 import numpy as np
 import glob
 import os
+import gc
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.utils import class_weight
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
 
-
-# ==============================
+# ==========================================================
 # 1. LOAD DATA
-# ==============================
+# ==========================================================
 
 DATA_PATH = "data/"
-
 files = glob.glob(os.path.join(DATA_PATH, "*.csv"))
 
 print("Found files:", files)
@@ -31,55 +32,42 @@ df_list = []
 
 for file in files:
     print("Loading:", file)
-
-    # Limit rows for safety (remove later if PC is strong)
-    temp = pd.read_csv(file, nrows=100000)
-
+    temp = pd.read_csv(file, nrows=100000)  # adjust if needed
     df_list.append(temp)
 
 df = pd.concat(df_list, ignore_index=True)
 
 print("Total rows:", len(df))
-print(df.head())
 
 
-# ==============================
+# ==========================================================
 # 2. CLEAN DATA
-# ==============================
+# ==========================================================
 
 print("\nCleaning data...")
 
-# Remove spaces in column names
 df.columns = df.columns.str.strip()
-
-# Replace infinite with NaN
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
-
-# Drop missing values
 df.dropna(inplace=True)
 
 print("After cleaning:", df.shape)
 
 
-# ==============================
-# 3. PREPARE FEATURES & LABEL
-# ==============================
-
-print("\nPreparing features and labels...")
+# ==========================================================
+# 3. PREPARE FEATURES & LABELS
+# ==========================================================
 
 X = df.drop("Label", axis=1)
 y = df["Label"]
 
-# Encode labels
 encoder = LabelEncoder()
 y = encoder.fit_transform(y)
 
 print("Classes:", encoder.classes_)
 
-
-# ==============================
+# ==========================================================
 # 4. TRAIN-TEST SPLIT
-# ==============================
+# ==========================================================
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y,
@@ -92,9 +80,9 @@ print("Train size:", X_train.shape)
 print("Test size:", X_test.shape)
 
 
-# ==============================
-# 5. FEATURE SCALING
-# ==============================
+# ==========================================================
+# 5. SCALING
+# ==========================================================
 
 scaler = StandardScaler()
 
@@ -102,14 +90,15 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 
-# ==============================
-# 6. RANDOM FOREST (BASELINE)
-# ==============================
+# ==========================================================
+# 6. RANDOM FOREST (BASE MODEL)
+# ==========================================================
 
 print("\nTraining Random Forest...")
 
 rf = RandomForestClassifier(
-    n_estimators=100,
+    n_estimators=150,
+    class_weight="balanced",
     random_state=42,
     n_jobs=-1
 )
@@ -122,57 +111,73 @@ print("\n=== RANDOM FOREST RESULTS ===")
 print(classification_report(y_test, rf_pred))
 
 
-# ==============================
-# 7. FEATURE SELECTION (RF)
-# ==============================
+# ==========================================================
+# 7. FEATURE SELECTION USING RF
+# ==========================================================
 
 print("\nSelecting important features...")
 
 importances = rf.feature_importances_
-
-# Select top features
-N_FEATURES = 30   # You may change this
+N_FEATURES = 20
 
 indices = np.argsort(importances)[-N_FEATURES:]
 
 X_train_sel = X_train_scaled[:, indices]
 X_test_sel = X_test_scaled[:, indices]
 
-print("Selected features:", N_FEATURES)
+print("Selected top features:", N_FEATURES)
 
 
-# ==============================
-# 8. RESHAPE FOR RNN
-# ==============================
+# ==========================================================
+# 8. CREATE TEMPORAL SEQUENCES
+# ==========================================================
 
-# RNN expects: (samples, timesteps, features)
-# We use 1 timestep (simplified sequence)
+def create_sequences(data, labels, seq_length=10):
+    X_seq, y_seq = [], []
+    
+    for i in range(len(data) - seq_length):
+        X_seq.append(data[i:i+seq_length])
+        y_seq.append(labels[i+seq_length])
+    
+    return np.array(X_seq), np.array(y_seq)
 
-X_train_rnn = X_train_sel.reshape(
-    X_train_sel.shape[0], 1, X_train_sel.shape[1]
+SEQ_LENGTH = 10
+
+X_train_seq, y_train_seq = create_sequences(X_train_sel, y_train, SEQ_LENGTH)
+X_test_seq, y_test_seq = create_sequences(X_test_sel, y_test, SEQ_LENGTH)
+
+print("Sequence shape:", X_train_seq.shape)
+
+gc.collect()
+
+
+# ==========================================================
+# 9. COMPUTE CLASS WEIGHTS
+# ==========================================================
+
+class_weights = class_weight.compute_class_weight(
+    class_weight="balanced",
+    classes=np.unique(y_train_seq),
+    y=y_train_seq
 )
 
-X_test_rnn = X_test_sel.reshape(
-    X_test_sel.shape[0], 1, X_test_sel.shape[1]
-)
+class_weight_dict = dict(enumerate(class_weights))
 
 
-# ==============================
-# 9. BUILD RNN MODEL
-# ==============================
+# ==========================================================
+# 10. BUILD LSTM MODEL
+# ==========================================================
 
-print("\nBuilding RNN model...")
+print("\nBuilding LSTM model...")
 
 model = Sequential()
 
 model.add(LSTM(
     64,
-    input_shape=(1, N_FEATURES),
-    return_sequences=False
+    input_shape=(SEQ_LENGTH, N_FEATURES)
 ))
 
 model.add(Dropout(0.3))
-
 model.add(Dense(32, activation="relu"))
 model.add(Dense(len(np.unique(y)), activation="softmax"))
 
@@ -185,40 +190,60 @@ model.compile(
 model.summary()
 
 
-# ==============================
-# 10. TRAIN RNN
-# ==============================
+# ==========================================================
+# 11. TRAIN LSTM
+# ==========================================================
 
-print("\nTraining RNN...")
+print("\nTraining LSTM...")
+
+early_stop = EarlyStopping(
+    monitor="val_loss",
+    patience=3,
+    restore_best_weights=True
+)
 
 history = model.fit(
-    X_train_rnn,
-    y_train,
-    epochs=10,
+    X_train_seq,
+    y_train_seq,
+    epochs=25,
     batch_size=128,
     validation_split=0.1,
+    class_weight=class_weight_dict,
+    callbacks=[early_stop],
     verbose=1
 )
 
 
-# ==============================
-# 11. EVALUATE HYBRID MODEL
-# ==============================
+# ==========================================================
+# 12. EVALUATE LSTM
+# ==========================================================
 
-print("\nEvaluating RNN...")
+print("\nEvaluating LSTM...")
 
-rnn_pred = model.predict(X_test_rnn)
-rnn_pred_classes = np.argmax(rnn_pred, axis=1)
+rnn_proba = model.predict(X_test_seq)
+rnn_pred = np.argmax(rnn_proba, axis=1)
 
-print("\n=== HYBRID RF + RNN RESULTS ===")
-print(classification_report(y_test, rnn_pred_classes))
-
+print("\n=== LSTM RESULTS ===")
+print(classification_report(y_test_seq, rnn_pred))
 print("\nConfusion Matrix:")
-print(confusion_matrix(y_test, rnn_pred_classes))
+print(confusion_matrix(y_test_seq, rnn_pred))
 
 
-# ==============================
-# DONE
-# ==============================
+# ==========================================================
+# 13. HYBRID ENSEMBLE (RF + LSTM)
+# ==========================================================
 
-print("\nTraining complete.")
+print("\nBuilding Ensemble...")
+
+# Align RF predictions to sequence size
+rf_proba = rf.predict_proba(X_test_scaled[SEQ_LENGTH:])
+
+ensemble_proba = (rf_proba + rnn_proba) / 2
+ensemble_pred = np.argmax(ensemble_proba, axis=1)
+
+print("\n=== HYBRID RF + LSTM RESULTS ===")
+print(classification_report(y_test_seq, ensemble_pred))
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test_seq, ensemble_pred))
+
+print("\nTraining Complete.")
