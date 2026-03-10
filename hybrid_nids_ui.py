@@ -505,22 +505,20 @@ def parse_pcap(filepath: str, max_flows: int = 500):
     return df, raw_info, None
 
 
-# ─── Helper: preprocess ────────────────────────────────────────────────────────
 def preprocess(df: pd.DataFrame, scaler, expected_features: list):
-    """Align columns, fill NaN/inf, apply quantile transform."""
-    # keep only model features
+    # Drop metadata columns
     meta_cols = [c for c in df.columns if c.startswith("_")]
     feat_df   = df.drop(columns=meta_cols, errors="ignore")
 
-    # add missing columns as 0
+    # Add missing columns
     for col in expected_features:
         if col not in feat_df.columns:
             feat_df[col] = 0.0
 
+    # Reorder to match expected features
     feat_df = feat_df[expected_features].copy()
-    feat_df = feat_df.replace([np.inf, -np.inf], np.nan)
-    feat_df = feat_df.fillna(0.0)
-    feat_df = feat_df.astype(np.float32)
+
+    feat_df = feat_df.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
 
     if scaler is not None:
         arr = scaler.transform(feat_df.values)
@@ -528,7 +526,6 @@ def preprocess(df: pd.DataFrame, scaler, expected_features: list):
         arr = feat_df.values
 
     return arr
-
 
 # ─── Helper: hybrid predict ────────────────────────────────────────────────────
 def hybrid_predict(X, rf_model, tabnet_model, config):
