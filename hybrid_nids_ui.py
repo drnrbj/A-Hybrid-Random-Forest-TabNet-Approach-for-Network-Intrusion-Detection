@@ -504,24 +504,34 @@ def parse_pcap(filepath: str, max_flows: int = 500):
     df = pd.DataFrame(records)
     return df, raw_info, None
 
-
 def preprocess(df: pd.DataFrame, scaler, expected_features: list):
     # Drop metadata columns
     meta_cols = [c for c in df.columns if c.startswith("_")]
-    feat_df   = df.drop(columns=meta_cols, errors="ignore")
+    feat_df = df.drop(columns=meta_cols, errors="ignore")
 
-    # Add missing columns
+    # Ensure all expected features exist
     for col in expected_features:
         if col not in feat_df.columns:
             feat_df[col] = 0.0
 
-    # Reorder to match expected features
+    # Reorder columns
     feat_df = feat_df[expected_features].copy()
 
+    # Replace invalid values
     feat_df = feat_df.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
 
+    # Apply QuantileTransformer if available
     if scaler is not None:
-        arr = scaler.transform(feat_df.values)
+        # ⚡ This ensures shape exactly matches scaler
+        X = feat_df.values
+        if X.shape[1] != scaler.n_features_in_:
+            # pad or trim
+            n_diff = scaler.n_features_in_ - X.shape[1]
+            if n_diff > 0:
+                X = np.hstack([X, np.zeros((X.shape[0], n_diff), dtype=np.float32)])
+            else:
+                X = X[:, :scaler.n_features_in_]
+        arr = scaler.transform(X)
     else:
         arr = feat_df.values
 
@@ -778,15 +788,14 @@ with st.expander("📋  Top 10 Source → Destination Pairs"):
     pairs = Counter()
     for _, row in flow_df.iterrows():
         pairs[(row.get("_src_ip", "?"), row.get("_dst_ip", "?"), row.get("_proto", "?"))] += 1
+    # Build DataFrame from top 10 source→destination→protocol flows
     top_pairs = pairs.most_common(10)
-    pair_df = pd.DataFrame(top_pairs, columns=["Src IP", "Dst IP", "Protocol", "Flows"])
-    if len(pair_df.columns) == 4:
-        pair_df = pd.DataFrame(
-            [(s, d, p, c) for (s, d, p), c in top_pairs],
-            columns=["Src IP", "Dst IP", "Protocol", "Flows"],
-        )
+    pair_df = pd.DataFrame(
+        [(src, dst, proto, count) for (src, dst, proto), count in top_pairs],
+        columns=["Src IP", "Dst IP", "Protocol", "Flows"]
+    )
     st.dataframe(pair_df, use_container_width=True, hide_index=True)
-
+    
 if show_raw:
     with st.expander("🔬  Raw Feature Table (first 50 rows)"):
         feat_cols = [c for c in flow_df.columns if not c.startswith("_")]
