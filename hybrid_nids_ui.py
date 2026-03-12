@@ -982,7 +982,7 @@ if show_raw:
         st.dataframe(flow_df[fc].head(50), use_container_width=True)
 
 # ── Per-flow prediction table — expander (dropdown) ───────────────────────────
-with st.expander("Per-Flow Prediction Detail", expanded=False):
+with st.expander("Per-Flow Prediction Detail", expanded=False)
     lmap = {0:"BENIGN", 1:"ATTACK"}
     res  = pd.DataFrame({
         "Src IP":     flow_df["_src_ip"].values,
