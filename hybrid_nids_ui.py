@@ -18,8 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-pd.set_option("styler.render.max_elements", 2000000)
-
 # ─── Custom CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -546,11 +544,10 @@ if uploaded is not None:
     left, right = st.columns([1, 1], gap="large")
 
     with left:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(
             '<div style="font-family:Space Mono,monospace;font-size:0.7rem;'
             'letter-spacing:2px;text-transform:uppercase;color:#64748b;'
-            'margin-bottom:14px;">Traffic Distribution</div>',
+            'margin-bottom:1px;">Traffic Distribution</div>',
             unsafe_allow_html=True
         )
         fig = make_bar_chart(benign_count, attack_count)
@@ -559,7 +556,6 @@ if uploaded is not None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     with right:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(
             '<div style="font-family:Space Mono,monospace;font-size:0.7rem;'
             'letter-spacing:2px;text-transform:uppercase;color:#64748b;'
@@ -594,7 +590,7 @@ if uploaded is not None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Per-flow prediction table ─────────────────────────────────────────────
-    st.markdown('<div class="section-title">Per-Flow Predictions</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title"></div>', unsafe_allow_html=True)
 
     label_names = ["BENIGN", "ATTACK"]
     result_df = pd.DataFrame({
@@ -620,6 +616,8 @@ if uploaded is not None:
     styled = result_df.style.applymap(style_prediction, subset=["Prediction"])
 
     st.dataframe(styled, use_container_width=True, height=420)
+    st.dataframe(res.head(1000).style.applymap(_color, subset=scols),
+             use_container_width=True, hide_index=True)
 
     # ── Download ──────────────────────────────────────────────────────────────
     csv_out = result_df.to_csv(index=False).encode("utf-8")
